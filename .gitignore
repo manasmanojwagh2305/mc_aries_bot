@@ -1,0 +1,11 @@
+# Node
+mc_bridge/node_modules/
+npm-debug.log
+
+# Python
+brain/venv/
+brain/__pycache__/
+*.pyc
+
+# Environment variables (keep your API keys safe later)
+.env
