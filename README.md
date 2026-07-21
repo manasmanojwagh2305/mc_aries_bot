@@ -1,4 +1,3 @@
-```markdown
 # MC Aries Bot ♈
 
 An autonomous, multi-modal Minecraft AI agent built with a dual-server architecture. It bridges a Python-based intelligence layer (powered by Groq Llama 3) with a Node.js execution engine (using Mineflayer), enabling true natural language control both in-game and via API.
