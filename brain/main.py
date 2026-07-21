@@ -26,6 +26,17 @@ class PlaceRequest(BaseModel):
     y: float
     z: float
 
+class DepositRequest(BaseModel):
+    itemName: str
+    count: int = None # If null, deposits all of that item
+
+class CraftRequest(BaseModel):
+    itemName: str
+    count: int = 1
+
+class FightRequest(BaseModel):
+    mobName: str
+
 @app.post("/agent/move")
 def command_move(req: MoveRequest):
     try:
@@ -70,6 +81,30 @@ def command_place(req: PlaceRequest):
 def command_pvp():
     try:
         response = requests.post(f"{MC_BRIDGE_URL}/pvp")
+        return response.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/agent/deposit")
+def command_deposit(req: DepositRequest):
+    try:
+        response = requests.post(f"{MC_BRIDGE_URL}/deposit", json=req.dict())
+        return response.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/agent/craft")
+def command_craft(req: CraftRequest):
+    try:
+        response = requests.post(f"{MC_BRIDGE_URL}/craft", json=req.dict())
+        return response.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/agent/fight")
+def command_fight(req: FightRequest):
+    try:
+        response = requests.post(f"{MC_BRIDGE_URL}/fight", json=req.dict())
         return response.json()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

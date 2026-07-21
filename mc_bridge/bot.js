@@ -64,11 +64,30 @@ bot.on('chat', async (username, message) => {
                 maxDistance: 32
             }));
             bot.chat(`Finished collecting ${blockName}!`);
+        } else if (command === 'fight') {
+            // Usage: fight zombie
+            const mobName = args[1] || 'zombie';
+            const target = bot.nearestEntity(e => e.name && e.name.toLowerCase().includes(mobName.toLowerCase()) && e.position.distanceTo(bot.entity.position) < 16);
+            
+            if (!target) {
+                bot.chat(`I don't see any ${mobName} nearby!`);
+                return;
+            }
 
+            const weapon = bot.inventory.items().find(i => i.name.includes('sword') || i.name.includes('axe'));
+            if (weapon) await bot.equip(weapon, 'hand');
+
+            bot.chat(`Attacking ${target.name}!`);
+            bot.pvp.attack(target);
+        
         } else if (command === 'stop') {
             // Usage: stop
             bot.pathfinder.stop();
+            if (bot.pvp) {
+                bot.pvp.stop();
+            }
             bot.chat("Stopping current action.");
+            
         }
     } catch (err) {
         bot.chat(`Error executing command: ${err.message}`);
@@ -118,6 +137,9 @@ app.post('/api/collect', async (req, res) => {
 app.delete('/api/stop', (req, res) => {
     try {
         bot.pathfinder.stop();
+        if (bot.pvp) {
+            bot.pvp.stop();
+        }
         bot.clearControlStates();
         bot.collectBlock.stop();
         res.json({ status: 'interrupted', message: 'All bot actions cleared.' });
@@ -178,6 +200,115 @@ app.post('/api/pvp', (req, res) => {
         res.status(500).json({ status: 'error', message: err.message });
     }
 });
+
+// 7. Deposit items into a nearby chest
+app.post('/api/deposit', async (req, res) => {
+    const { itemName, count } = req.body;
+    try {
+        // Find the nearest chest block
+        const chestToOpen = bot.findBlock({
+            matching: bot.registry.blocksByName.chest.id,
+            maxDistance: 6
+        });
+
+        if (!chestToOpen) {
+            return res.status(404).json({ status: 'error', message: 'No chest found nearby.' });
+        }
+
+        // Check if the bot actually has the item
+        const itemToDeposit = bot.inventory.items().find(i => i.name === itemName);
+        if (!itemToDeposit) {
+            return res.status(400).json({ status: 'error', message: `Bot does not have any ${itemName}.` });
+        }
+
+        const depositCount = count || itemToDeposit.count;
+
+        // Open chest, deposit, and close
+        const chest = await bot.openContainer(chestToOpen);
+        await chest.deposit(itemToDeposit.type, null, depositCount);
+        await chest.close();
+
+        res.json({ status: 'success', message: `Deposited ${depositCount} ${itemName} into the chest.` });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// 8. Craft items (e.g. oak_planks, crafting_table, sticks)
+app.post('/api/craft', async (req, res) => {
+    const { itemName, count } = req.body;
+    try {
+        const mcData = require('minecraft-data')(bot.version);
+        const itemRecipe = mcData.itemsByName[itemName];
+        
+        if (!itemRecipe) {
+            return res.status(400).json({ status: 'error', message: `Unknown item: ${itemName}` });
+        }
+
+        const recipes = bot.recipesFor(itemRecipe.id, null, 1, false);
+        if (!recipes || recipes.length === 0) {
+            return res.status(400).json({ status: 'error', message: `No recipe available for ${itemName} with current inventory.` });
+        }
+
+        const recipe = recipes[0];
+        
+        // Check if a crafting table is required (recipes requiring 3x3 grid)
+        let craftingTable = null;
+        if (recipe.requiresTable) {
+            craftingTable = bot.findBlock({
+                matching: mcData.blocksByName.crafting_table.id,
+                maxDistance: 4
+            });
+            if (!craftingTable) {
+                return res.status(400).json({ status: 'error', message: `Crafting ${itemName} requires a crafting table nearby, but none was found.` });
+            }
+        }
+
+        const craftCount = count || 1;
+        await bot.craft(recipe, craftCount, craftingTable);
+        
+        res.json({ status: 'success', message: `Successfully crafted ${craftCount} ${itemName}(s).` });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// 9. Fight hostile mobs or specific entity types
+app.post('/api/fight', async (req, res) => {
+    const { mobName } = req.body; // e.g. "zombie", "skeleton", "spider"
+    try {
+        // Broaden filter: check name, mob type, or username/entity type
+        const targetMob = bot.nearestEntity(entity => {
+            if (!entity || !entity.position) return false;
+            const distance = entity.position.distanceTo(bot.entity.position);
+            if (distance > 20) return false; // within 20 blocks
+
+            // Match by exact name, type, or partial string match
+            const nameMatch = entity.name && entity.name.toLowerCase().includes(mobName.toLowerCase());
+            const typeMatch = entity.type === 'mob' && mobName.toLowerCase() === 'mob';
+            
+            return nameMatch || typeMatch;
+        });
+
+        if (!targetMob) {
+            return res.status(404).json({ status: 'error', message: `No nearby ${mobName} found within 20 blocks.` });
+        }
+
+        // Try to equip a sword or axe if available in inventory
+        const weapon = bot.inventory.items().find(i => i.name.includes('sword') || i.name.includes('axe'));
+        if (weapon) {
+            await bot.equip(weapon, 'hand');
+        }
+
+        // Start attacking the target using the pvp plugin
+        bot.pvp.attack(targetMob);
+        
+        res.json({ status: 'success', message: `Engaged combat with ${targetMob.name || mobName}!` });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
 // Start the Bridge Server
 const PORT = 3000;
 app.listen(PORT, () => {
