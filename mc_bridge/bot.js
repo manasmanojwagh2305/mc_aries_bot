@@ -88,6 +88,35 @@ bot.on('chat', async (username, message) => {
             }
             bot.chat("Stopping current action.");
             
+        } else if (command === 'aries' || command === 'ai') {
+            // Usage: aries [natural language prompt]
+            const prompt = args.slice(1).join(' ');
+            if (!prompt) {
+                bot.chat("What do you want me to do?");
+                return;
+            }
+            
+            bot.chat("Thinking...");
+            
+            try {
+                // Forward the prompt to the Python FastAPI Brain
+                const response = await fetch('http://localhost:8000/agent/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt: prompt })
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    // Bot speaks the LLM's response in the game chat
+                    bot.chat(data.response);
+                } else {
+                    bot.chat("I got confused processing that.");
+                }
+            } catch (err) {
+                bot.chat(`Brain connection failed: ${err.message}`);
+            }
         }
     } catch (err) {
         bot.chat(`Error executing command: ${err.message}`);
