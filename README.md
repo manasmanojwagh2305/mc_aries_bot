@@ -1,10 +1,3 @@
-Here is a complete, highly polished `README.md` template for your repository. It captures all the heavy engineering, the Voyager architecture, and the new bulletproof sandbox we just built.
-
-I formatted it with clean typography, feature grids, and strict technical documentation—the exact kind of high-tier aesthetic you'd see on a top-trending GitHub repo.
-
----
-
-```markdown
 # 🌌 ARIES // Autonomous Minecraft Agent
 
 ![Node.js](https://img.shields.io/badge/Node.js-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)
