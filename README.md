@@ -6,42 +6,113 @@
 ![Tailwind](https://img.shields.io/badge/Tailwind_CSS-38B2AC?style=for-the-badge&logo=tailwind-css&logoColor=white)
 ![Groq](https://img.shields.io/badge/Groq-F55036?style=for-the-badge&logo=groq&logoColor=white)
 
-ARIES (Autonomous Reactive Intelligent Embodied System) is a dual-server cognitive architecture for Minecraft, heavily inspired by the [MineDojo Voyager](https://github.com/MineDojo/Voyager) framework. 
+**ARIES** (Autonomous Reactive Intelligent Embodied System) is a dual-server cognitive architecture for Minecraft, built to mirror and surpass the [MineDojo Voyager](https://github.com/MineDojo/Voyager) framework.
 
-It pairs a high-performance **Node.js/Mineflayer bridge** with an asynchronous **Python/FastAPI brain** powered by Groq LLMs. ARIES dynamically writes its own JavaScript on the fly, tests it in an isolated VM sandbox, mathematically verifies the results, and saves successful routines to a vector memory library for future reuse.
+It couples a high-frequency **Node.js/Mineflayer bridge** with an asynchronous **Python/FastAPI brain** powered by Groq LLMs. ARIES dynamically generates JavaScript subroutines, executes them in an isolated Node `vm` sandbox, mathematically verifies state changes, diagnoses execution failures via an LLM Critic, and indexes reusable routines in a vector-backed skill store.
 
 ---
 
-## ⚡ Core Architecture
+## 📂 Project Structure
 
-### 🧠 The Cognitive Brain (FastAPI)
-- **Asynchronous Execution Loop:** Built with `httpx` and `asyncio.Lock()` to handle high-frequency telemetry polling and script execution without blocking the event loop.
-- **Mathematical Telemetry Diffing:** Verifies sub-goal success strictly via mathematical state changes (e.g., checking `post_inventory - pre_inventory >= target`).
-- **Vector Skill Library:** Automatically caches and retrieves successful, dynamically generated LLM code snippets (supporting ChromaDB and JSON fallback).
-- **Curriculum Planner:** A background dependency-tree evaluator that automatically dictates the agent's next sub-goal based on health, biome, and inventory state.
+```text
+.
+├── brain/
+│   ├── skill_store/
+│   │   └── skills.json         # Master skill index (code + docstring descriptions)
+│   ├── templates/
+│   │   └── index.html          # STT & Real-Time Telemetry Web Control Center
+│   ├── main.py                 # FastAPI orchestrator, Curriculum Loop & Critic Agent
+│   ├── requirements.txt        # Python dependencies (httpx, fastapi, uvicorn, groq, etc.)
+│   └── world_map.py            # Cartographer spatial memory & chunk-indexed POI store
+├── mc_bridge/
+│   ├── bot.js                  # Hardened Mineflayer bot, VM sandbox & primitive wrappers
+│   ├── package-lock.json
+│   └── package.json            # Node.js dependencies
+├── .gitignore
+├── README.md
+└── voyager_architecture.md     # Reverse-engineering blueprint of MineDojo Voyager
 
-### 🛡️ The Hardened Bridge (Node.js)
-- **Bulletproof VM Sandbox:** Executes LLM-generated code in a strictly controlled `vm` context. `Object.freeze()` prevents prototype pollution, and all async `setTimeout` handles are tracked and destroyed post-execution.
-- **Crash-Proof Safety Nets:** Global `unhandledRejection` guards and isolated `.catch()` chains ensure floating LLM promises never crash the bridge server.
-- **Resilient Crafting Engine:** Features an item alias dictionary to normalize LLM hallucinations (e.g., `wooden_plank` -> `oak_planks`), fuzzy-matching, and automatic pathfinding to 3x3 crafting tables.
+```
 
-### 🎛️ STT Control Center (Alpine.js + Tailwind)
-- **Zero-Latency Dictation:** Features browser-native Web Speech API integration for instant voice-to-text commands.
-- **High-Polish UI/UX:** A modern, dark-mode dashboard featuring mesh gradients, glassmorphism, and live telemetry tracking (Health, Food, XYZ, Biome, and Inventory).
-- **Dynamic Goal Editing:** Instantly pivot the agent's master goal via the realtime REST API.
+---
+
+## ⚡ Cognitive Architecture & Voyager Parity
+
+ARIES implements the four core cognitive pillars of the Voyager specification, optimized for low latency and zero-crash process safety:
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                             ARIES BRAIN                                  │
+│                                                                          │
+│   ┌────────────────────┐    Subgoal & Code    ┌──────────────────────┐   │
+│   │ Curriculum Planner │ ───────────────────► │ Execution Engine     │   │
+│   │(llama-3.1-8b)      │                      │ (Async httpx + Lock) │   │
+│   └─────────▲──────────┘                      └──────────┬───────────┘   │
+│             │                                            │               │
+│             │ State & Summary                            │ JS Script     │
+│             │                                            ▼               │
+│   ┌─────────┴──────────┐   Critique / Fix     ┌──────────────────────┐   │
+│   │    Cartographer    │ ◄─────────────────── │    Critic Agent      │   │
+│   │   (world_map.py)   │                      │ (llama-3.3-70b)      │   │
+│   └────────────────────┘                      └──────────────────────┘   │
+│             ▲                                            │               │
+│             │ 7x7x7 Scans                                │ Verified Code │
+│             │                                            ▼               │
+│   ┌─────────┴──────────┐                      ┌──────────────────────┐   │
+│   │   Node.js Bridge   │ ───────────────────► │  Dual-Vector Skill   │   │
+│   │ (Mineflayer + VM)  │                      │  Store (skills.json) │   │
+│   └────────────────────┘                      └──────────────────────┘   │
+└──────────────────────────────────────────────────────────────────────────┘
+
+```
+
+### 🧠 1. LLM-Driven Curriculum (`llama-3.1-8b-instant`)
+
+* **Dynamic Subgoal Generation:** Evaluates inventory, nearby entities, time, biome, and spatial memory to propose the logical next task.
+* **Curiosity & Stagnation Override:** Calculates a 0–10 Curiosity Score. If curiosity reaches $\ge 6$ or inventory progress stalls for 6 consecutive ticks, the agent overrides task planning to explore new chunks directionally.
+* **Warm-Up Masking & Overflow Guards:** Masks non-essential items during early progression ($< 7$ tasks) to minimize token burn. If inventory usage hits $\ge 33/36$ slots, the agent automatically triggers a hardcoded chest placement and deposit routine.
+
+### 🗺️ 2. Cartographer Spatial Memory (`world_map.py`)
+
+* **Passive Chunk Logging:** The Node bridge scans a $7\times7\times7$ block volume around the bot every 8 blocks of movement and logs landmark blocks (ores, chests, spawners, portals, furnaces) to Python.
+* **Underground Override:** Automatically overrides surface biome tags to `"underground"` when surrounding voxels lack surface blocks (dirt, grass, sand).
+* **Distance-Sorted Telemetry:** Nearby entities are sorted strictly by ascending Euclidean distance (`nearest to farthest`).
+
+### ⚡ 3. Dual-Representation Skill RAG
+
+* **Docstring Embeddings:** Generated skills save both raw code and an LLM-summarized docstring `description`. Vector searches embed the natural language description rather than function names or raw code.
+* **Augmented Failure Queries:** When retrying after a failure, the retrieval query is augmented with the error output and missing item logs (`query = context + "\n\nMissing: " + chat_log`).
+* **Inline Pre-Injection:** Top-matched skills are pre-injected into code generation prompts as inline `async function` blocks, enabling functions like `await collectOakLog()` to be called directly without recompiling sandbox context.
+
+### 🔬 4. Critic Agent (`llama-3.3-70b-versatile`)
+
+* **Non-Blocking Failure Analysis:** Fires asynchronously upon execution failure or telemetry diff mismatch.
+* **10-Point Diagnostic Checklist:** Evaluates stack traces, missing inventory items, wrong item IDs, unawaited promises, and pathfinding blocks.
+* **Structured Self-Correction:** Outputs `failure_reason`, `suggested_fix`, and `avoid_patterns[]` to steer the next code generation attempt. Unrecoverable failures trigger an immediate short-circuit to save API quota.
+
+### 🛡️ 5. Control Primitives & Hardened Sandbox
+
+* **Direct API Prohibition:** The system prompt strictly forbids raw Mineflayer calls (`bot.dig`, `bot.craft`, `bot.openFurnace`, `bot.placeBlock`, `bot.attack`).
+* **Mandatory Primitives:** All physical actions are enforced through high-level primitive wrappers: `mineBlock`, `craftItem`, `smeltItem`, `placeItem`, `killMob`, and `exploreUntil`.
+* **VM Isolation:** Code executes inside Node's `vm` module with `Object.freeze()` prototype locking, isolated timeouts, and global `unhandledRejection` safety nets.
 
 ---
 
 ## 🚀 Getting Started
 
 ### Prerequisites
-- Node.js (v18+)
-- Python (3.9+)
-- A Minecraft Server (v1.21.x recommended)
-- A Groq API Key
 
-### 1. Setup the Node.js Bridge
-Navigate to the `mc_bridge` directory and install the dependencies.
+* **Node.js**: v18.x or higher
+* **Python**: 3.9 or higher
+* **Minecraft Server**: Local LAN world or dedicated server running v1.21.x (listening on `localhost:25565`)
+* **Groq API Key**: Obtainable from [console.groq.com](https://console.groq.com)
+
+---
+
+### Installation & Setup
+
+#### 1. Configure the Node.js Bridge
+
 ```bash
 cd mc_bridge
 npm install
@@ -49,36 +120,59 @@ node bot.js
 
 ```
 
-*Note: Ensure your local Minecraft server or LAN world is open to `localhost:25565`.*
+*The bridge will connect to your local Minecraft instance and log:*
 
-### 2. Setup the Python Brain
+`[MC Bridge] Hardened server listening on http://localhost:3000`
 
-Navigate to the `brain` directory, set up your environment, and launch the API.
+#### 2. Configure the Python Brain
+
+Open a new terminal session and navigate to the `brain` directory:
 
 ```bash
 cd brain
+
+# Create and activate a virtual environment
 python -m venv venv
-source venv/bin/activate  # On Windows use: venv\Scripts\activate
+# On Windows:
+venv\Scripts\activate
+# On Linux/macOS:
+source venv/bin/activate
+
+# Install dependencies
 pip install -r requirements.txt
 
-# Add your Groq API key to a .env file
-echo "GROQ_API_KEY=your_key_here" > .env
+# Export your Groq API key
+# On Windows (PowerShell):
+$env:GROQ_API_KEY="your_groq_api_key_here"
+# On Linux/macOS:
+export GROQ_API_KEY="your_groq_api_key_here"
 
+# Start the FastAPI server
 uvicorn main:app --reload
 
 ```
 
-### 3. Launch the Dashboard
+---
 
-Open your browser and navigate to `http://localhost:8000` to access the ARIES Control Center. Click the microphone icon to begin dictating commands, or let the background Curriculum Planner run autonomously!
+## 🎛️ STT Control Center
+
+Once both servers are running, open your web browser and navigate to:
+
+```text
+http://localhost:8000
+
+```
+
+The Web Dashboard provides a real-time monitor into ARIES's cognitive state:
+
+* **Speech-to-Text Dictation:** Dictate master goals using the Web Speech API interface.
+* **LLM Rationale Card:** Displays real-time reasoning behind task proposals.
+* **Curiosity Gauge:** Dynamic visual indicator showing current exploration drive (0–10 scale).
+* **Cartographer POI Pills:** Color-coded count of discovered world landmarks and ores.
+* **Critic Report Panel:** Displays natural-language root-cause diagnoses and suggested fixes whenever a script fails.
 
 ---
 
-## 🔒 Security & Sandboxing Note
-
-ARIES dynamically executes untrusted LLM code. The `/api/execute-script` endpoint is hardened against infinite loops, coordinate injection, and prototype pollution, but this bridge should **never** be exposed directly to the public internet without strict authentication middleware.
-
 ## 📄 License
 
-MIT License
-
+Distributed under the MIT License. See `LICENSE` for details.
