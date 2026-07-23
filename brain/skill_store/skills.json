@@ -1,0 +1,9 @@
+{
+  "craft_1_crafting_table": {
+    "id": "craft_1_crafting_table",
+    "name": "Craft 1 crafting_table",
+    "description": "Mineflayer script for: Craft 1 crafting_table",
+    "code": "const craftingTableItemName = normalizeItemName('crafting_table');\nconst oakPlanksItemName = normalizeItemName('oak_planks');\n\nasync function craftCraftingTable() {\n  const oakLogs = bot.inventory.items().find(i => i.name === normalizeItemName('oak_log'));\n  if (!oakLogs) {\n    console.error('No oak logs found in inventory');\n    return;\n  }\n\n  const oakPlanksCount = 4;\n\n  if (oakLogs.count < oakPlanksCount) {\n    console.error('Not enough oak logs to craft oak planks');\n    return;\n  }\n\n  await bot.craft(4, [oakLogs]);\n\n  const oakPlanks = bot.inventory.items().find(i => i.name === oakPlanksItemName);\n  if (!oakPlanks) {\n    console.error('No oak planks found in inventory');\n    return;\n  }\n\n  const craftingTableCount = 1;\n\n  if (oakPlanks.count < oakPlanksCount) {\n    console.error('Not enough oak planks to craft a crafting table');\n    return;\n  }\n\n  await bot.craft(craftingTableCount, [oakPlanks, oakPlanks, oakPlanks, oakPlanks]);\n}\n\ncraftCraftingTable();",
+    "sub_goal": "Craft 1 crafting_table"
+  }
+}

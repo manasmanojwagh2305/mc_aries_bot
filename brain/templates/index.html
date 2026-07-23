@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ARIES // Voyager Cognitive Control Center</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Alpine.js -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <!-- Google Fonts: Inter & JetBrains Mono -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                    colors: {
+                        brand: {
+                            50: '#f0f3ff',
+                            500: '#6366f1',
+                            600: '#4f46e5',
+                            900: '#1e1b4b',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #090a0f;
+            color: #f3f4f6;
+            font-family: 'Inter', sans-serif;
+        }
+        .mesh-bg {
+            background-image: 
+                radial-gradient(circle at 15% 15%, rgba(99, 102, 241, 0.15) 0%, transparent 40%),
+                radial-gradient(circle at 85% 85%, rgba(168, 85, 247, 0.12) 0%, transparent 45%),
+                radial-gradient(circle at 50% 50%, rgba(14, 165, 233, 0.08) 0%, transparent 60%);
+        }
+        .glass-panel {
+            background: rgba(15, 17, 26, 0.75);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .glass-card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+        }
+        /* Custom scrollbars */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.2);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.25);
+        }
+        @keyframes pulse-ring {
+            0% { transform: scale(0.95); opacity: 0.8; }
+            50% { transform: scale(1.15); opacity: 0.4; }
+            100% { transform: scale(0.95); opacity: 0.8; }
+        }
+        .pulse-mic {
+            animation: pulse-ring 1.8s infinite ease-in-out;
+        }
+    </style>
+</head>
+<body class="mesh-bg min-h-screen flex flex-col antialiased selection:bg-indigo-500 selection:text-white" x-data="appData()" x-init="init()">
+
+    <!-- HEADER / CONTROL STRIP -->
+    <header class="w-full glass-panel border-b border-white/10 px-6 py-4 sticky top-0 z-50 flex flex-wrap items-center justify-between gap-4">
+        <!-- Brand & Agent Status -->
+        <div class="flex items-center gap-4">
+            <div class="h-10 w-10 rounded-xl bg-gradient-to-tr from-indigo-600 via-purple-600 to-cyan-500 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+                <span class="font-mono text-lg font-bold text-white tracking-wider">Å</span>
+            </div>
+            <div>
+                <div class="flex items-center gap-2">
+                    <h1 class="text-lg font-bold tracking-tight text-white">ARIES <span class="text-xs font-mono px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">VOYAGER v2.0</span></h1>
+                    <!-- Status Badge -->
+                    <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border"
+                          :class="{
+                              'bg-emerald-500/10 text-emerald-400 border-emerald-500/30': isOnline,
+                              'bg-rose-500/10 text-rose-400 border-rose-500/30': !isOnline
+                          }">
+                        <span class="h-2 w-2 rounded-full" :class="isOnline ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'"></span>
+                        <span x-text="isOnline ? (curriculum.executing ? 'Executing Code' : 'Online / Idle') : 'Offline'"></span>
+                    </span>
+                </div>
+                <p class="text-xs text-gray-400 font-mono mt-0.5">Dual-Server Minecraft Cognitive Architecture</p>
+            </div>
+        </div>
+
+        <!-- Telemetry Pill Badges -->
+        <div class="flex items-center gap-3 font-mono text-xs flex-wrap">
+            <!-- Health -->
+            <div class="glass-card px-3 py-1.5 rounded-lg flex items-center gap-2 text-rose-300">
+                <svg class="w-4 h-4 text-rose-500 fill-rose-500" viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+                <span x-text="telemetry.health !== undefined ? telemetry.health + '/20' : '--'"></span>
+            </div>
+            <!-- Food -->
+            <div class="glass-card px-3 py-1.5 rounded-lg flex items-center gap-2 text-amber-300">
+                <svg class="w-4 h-4 text-amber-500 fill-amber-500" viewBox="0 0 24 24"><path d="M18.06 23h-1.66c-.38 0-.62-.25-.62-.63v-3.75c0-.62-.5-1.12-1.13-1.12h-5.3c-.63 0-1.13.5-1.13 1.12v3.75c0 .38-.24.63-.62.63H5.94c-.38 0-.63-.25-.63-.63v-6.25c0-1.9 1.54-3.44 3.44-3.44h6.5c1.9 0 3.44 1.54 3.44 3.44v6.25c0 .38-.25.63-.63.63z"/></svg>
+                <span x-text="telemetry.food !== undefined ? telemetry.food + '/20' : '--'"></span>
+            </div>
+            <!-- Coordinates -->
+            <div class="glass-card px-3 py-1.5 rounded-lg flex items-center gap-2 text-cyan-300">
+                <span class="text-cyan-500 font-bold">XYZ</span>
+                <span x-text="telemetry.position ? telemetry.position.x + ', ' + telemetry.position.y + ', ' + telemetry.position.z : '--, --, --'"></span>
+            </div>
+            <!-- Biome -->
+            <div class="glass-card px-3 py-1.5 rounded-lg flex items-center gap-2 text-purple-300">
+                <span class="text-purple-400">Biome:</span>
+                <span class="capitalize" x-text="telemetry.biome || 'Unknown'"></span>
+            </div>
+        </div>
+    </header>
+
+    <!-- DYNAMIC MASTER GOAL BAR -->
+    <div class="w-full px-6 pt-4">
+        <div class="glass-panel p-4 rounded-2xl flex flex-col md:flex-row items-center justify-between gap-4 border border-indigo-500/20 bg-indigo-950/10">
+            <div class="flex items-center gap-3 w-full md:w-auto">
+                <div class="p-2 rounded-lg bg-indigo-500/20 text-indigo-400">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                </div>
+                <div>
+                    <span class="text-xs font-mono uppercase text-indigo-400 font-semibold tracking-wider">Current Master Goal</span>
+                    <p class="text-sm font-medium text-white" x-text="curriculum.master_goal"></p>
+                </div>
+            </div>
+            
+            <div class="flex items-center gap-2 w-full md:w-auto">
+                <input type="text" x-model="newMasterGoal" placeholder="Update Master Goal..." 
+                       class="w-full md:w-80 px-4 py-2 text-xs rounded-xl bg-black/40 border border-white/10 text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500 transition-colors">
+                <button @click="updateMasterGoal()" 
+                        class="px-4 py-2 text-xs font-semibold rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white transition-all shadow-md shadow-indigo-600/30 shrink-0">
+                    Set Goal
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MAIN DASHBOARD CONTENT GRID -->
+    <main class="flex-1 p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+        <!-- LEFT COLUMN: CURRICULUM PLANNER (COL-3) -->
+        <section class="lg:col-span-3 flex flex-col gap-6">
+            <!-- Active Sub-Goal -->
+            <div class="glass-panel p-5 rounded-2xl flex flex-col gap-3">
+                <h2 class="text-xs font-mono font-bold uppercase tracking-wider text-gray-400 flex items-center justify-between">
+                    <span>Active Sub-Goal</span>
+                    <span class="h-2 w-2 rounded-full bg-indigo-400 animate-ping" x-show="curriculum.executing"></span>
+                </h2>
+
+                <div class="p-4 rounded-xl glass-card border-l-4 border-indigo-500">
+                    <p class="text-sm font-semibold text-white" x-text="curriculum.active_subgoal || 'No active sub-goal'"></p>
+                    <p class="text-xs text-gray-400 font-mono mt-1" x-text="curriculum.last_status || 'Idle'"></p>
+                </div>
+            </div>
+
+            <!-- Progression History -->
+            <div class="glass-panel p-5 rounded-2xl flex-1 flex flex-col gap-3">
+                <h2 class="text-xs font-mono font-bold uppercase tracking-wider text-gray-400">Progression Log</h2>
+                <div class="flex-1 overflow-y-auto space-y-2 pr-1 max-h-[400px]">
+                    <template x-for="(goal, idx) in curriculum.completed_subgoals" :key="idx">
+                        <div class="glass-card px-3 py-2 rounded-lg flex items-center gap-2.5 text-xs">
+                            <svg class="w-4 h-4 text-emerald-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                            <span class="text-gray-200 font-mono truncate" x-text="goal"></span>
+                        </div>
+                    </template>
+                    <div x-show="!curriculum.completed_subgoals || curriculum.completed_subgoals.length === 0" class="text-xs text-gray-500 italic p-3 text-center">
+                        No completed sub-goals yet.
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- CENTER COLUMN: INTERACTIVE STT & CHAT CONSOLE (COL-6) -->
+        <section class="lg:col-span-6 flex flex-col glass-panel rounded-2xl overflow-hidden min-h-[550px]">
+            <!-- Header -->
+            <div class="px-6 py-4 border-b border-white/10 flex items-center justify-between bg-white/[0.02]">
+                <div class="flex items-center gap-2">
+                    <span class="h-2.5 w-2.5 rounded-full bg-cyan-400 animate-pulse"></span>
+                    <h2 class="text-xs font-mono font-bold uppercase tracking-wider text-gray-300">Live Voice & Text Agent Console</h2>
+                </div>
+                <span class="text-xs text-gray-500 font-mono">Web Speech API Active</span>
+            </div>
+
+            <!-- Chat Stream -->
+            <div class="flex-1 p-6 overflow-y-auto space-y-4 max-h-[450px]" id="chatContainer">
+                <template x-for="(msg, idx) in chatHistory" :key="idx">
+                    <div class="flex flex-col" :class="msg.sender === 'user' ? 'items-end' : 'items-start'">
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="text-[10px] font-mono text-gray-500 uppercase" x-text="msg.sender"></span>
+                            <span class="text-[10px] font-mono text-gray-600" x-text="msg.timestamp"></span>
+                        </div>
+                        <div class="max-w-[85%] px-4 py-3 rounded-2xl text-sm leading-relaxed"
+                             :class="msg.sender === 'user' ? 'bg-indigo-600 text-white rounded-tr-none' : 'glass-card border-slate-700 text-gray-100 rounded-tl-none'">
+                            <p x-text="msg.text"></p>
+                        </div>
+                    </div>
+                </template>
+            </div>
+
+            <!-- Input Controls with STT Button -->
+            <div class="p-4 border-t border-white/10 bg-black/40 flex items-center gap-3">
+                <!-- Microphone Dictation Button -->
+                <button @click="toggleSpeech()" 
+                        class="p-3.5 rounded-xl transition-all flex items-center justify-center shrink-0"
+                        :class="isListening ? 'bg-rose-600 text-white pulse-mic shadow-lg shadow-rose-600/40' : 'glass-card text-gray-300 hover:text-white hover:border-indigo-500/50'">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/></svg>
+                </button>
+
+                <!-- Prompt Text Input -->
+                <input type="text" x-model="userInput" @keydown.enter="sendPrompt()" 
+                       placeholder="Speak via microphone or type natural language command..." 
+                       class="flex-1 px-4 py-3 text-sm rounded-xl bg-black/50 border border-white/10 text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500 transition-colors">
+
+                <!-- Send Button -->
+                <button @click="sendPrompt()" 
+                        class="px-5 py-3 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-xs font-semibold uppercase tracking-wider transition-all shadow-lg shadow-indigo-600/30 shrink-0">
+                    Send
+                </button>
+            </div>
+        </section>
+
+        <!-- RIGHT COLUMN: TELEMETRY & SKILL LIBRARY (COL-3) -->
+        <section class="lg:col-span-3 flex flex-col gap-6">
+            <!-- Inventory Grid -->
+            <div class="glass-panel p-5 rounded-2xl flex flex-col gap-3">
+                <h2 class="text-xs font-mono font-bold uppercase tracking-wider text-gray-400 flex justify-between">
+                    <span>Inventory</span>
+                    <span class="text-indigo-400 font-normal" x-text="(telemetry.inventory ? telemetry.inventory.length : 0) + ' items'"></span>
+                </h2>
+
+                <div class="grid grid-cols-2 gap-2 max-h-[220px] overflow-y-auto pr-1">
+                    <template x-for="(item, idx) in telemetry.inventory" :key="idx">
+                        <div class="glass-card p-2 rounded-lg flex items-center justify-between gap-1 text-xs">
+                            <span class="truncate text-gray-300 font-mono" x-text="item.name"></span>
+                            <span class="px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-bold text-[10px]" x-text="item.count"></span>
+                        </div>
+                    </template>
+                    <div x-show="!telemetry.inventory || telemetry.inventory.length === 0" class="col-span-2 text-xs text-gray-500 italic p-3 text-center">
+                        Inventory empty.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Vector Skill Library -->
+            <div class="glass-panel p-5 rounded-2xl flex-1 flex flex-col gap-3">
+                <h2 class="text-xs font-mono font-bold uppercase tracking-wider text-gray-400 flex justify-between">
+                    <span>Skill Library</span>
+                    <span class="text-purple-400 font-normal" x-text="skills.length + ' learned'"></span>
+                </h2>
+
+                <div class="flex-1 overflow-y-auto space-y-2 max-h-[250px] pr-1">
+                    <template x-for="(skill, idx) in skills" :key="idx">
+                        <div class="glass-card p-3 rounded-xl flex flex-col gap-1 border-l-2 border-purple-500">
+                            <span class="text-xs font-bold text-white capitalize" x-text="skill.name"></span>
+                            <p class="text-[11px] text-gray-400 line-clamp-2" x-text="skill.description"></p>
+                        </div>
+                    </template>
+                    <div x-show="!skills || skills.length === 0" class="text-xs text-gray-500 italic p-3 text-center">
+                        No vector skills indexed yet.
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- ALPINE.JS DASHBOARD APP CODE -->
+    <script>
+        function appData() {
+            return {
+                isOnline: true,
+                telemetry: {},
+                curriculum: {
+                    master_goal: 'Survive and thrive: gather wood, make tools, establish shelter, and prepare for progression.',
+                    active_subgoal: null,
+                    completed_subgoals: [],
+                    last_status: 'Idle'
+                },
+                newMasterGoal: '',
+                skills: [],
+                chatHistory: [
+                    { sender: 'aries', text: 'Hello! I am Aries, your autonomous Minecraft agent. Ready for commands.', timestamp: new Date().toLocaleTimeString() }
+                ],
+                userInput: '',
+                isListening: false,
+                recognition: null,
+
+                init() {
+                    this.fetchData();
+                    setInterval(() => this.fetchData(), 3000);
+                    this.initSpeech();
+                },
+
+                fetchData() {
+                    // Fetch Telemetry
+                    fetch('/agent/telemetry')
+                        .then(res => res.json())
+                        .then(data => {
+                            if (data.status === 'success') {
+                                this.telemetry = data.telemetry;
+                                this.isOnline = true;
+                            }
+                        })
+                        .catch(() => { this.isOnline = false; });
+
+                    // Fetch Curriculum
+                    fetch('/agent/curriculum')
+                        .then(res => res.json())
+                        .then(data => {
+                            if (data.status === 'success') {
+                                self.curriculum = data.curriculum;
+                            }
+                        })
+                        .catch(() => {});
+
+                    // Fetch Skills
+                    fetch('/agent/skills')
+                        .then(res => res.json())
+                        .then(data => {
+                            if (data.status === 'success') {
+                                this.skills = data.skills;
+                            }
+                        })
+                        .catch(() => {});
+                },
+
+                updateMasterGoal() {
+                    if (!this.newMasterGoal.trim()) return;
+                    fetch('/agent/curriculum/set-goal', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ master_goal: this.newMasterGoal })
+                    })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.status === 'success') {
+                            this.curriculum.master_goal = this.newMasterGoal;
+                            this.newMasterGoal = '';
+                        }
+                    });
+                },
+
+                sendPrompt() {
+                    const text = this.userInput.trim();
+                    if (!text) return;
+
+                    const timeStr = new Date().toLocaleTimeString();
+                    this.chatHistory.push({ sender: 'user', text: text, timestamp: timeStr });
+                    this.userInput = '';
+
+                    this.$nextTick(() => {
+                        const container = document.getElementById('chatContainer');
+                        if (container) container.scrollTop = container.scrollHeight;
+                    });
+
+                    fetch('/agent/chat', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ prompt: text })
+                    })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.status === 'success') {
+                            this.chatHistory.push({ sender: 'aries', text: data.response, timestamp: new Date().toLocaleTimeString() });
+                            this.$nextTick(() => {
+                                const container = document.getElementById('chatContainer');
+                                if (container) container.scrollTop = container.scrollHeight;
+                            });
+                        }
+                    })
+                    .catch(err => {
+                        this.chatHistory.push({ sender: 'aries', text: 'Error connecting to brain server: ' + err.message, timestamp: new Date().toLocaleTimeString() });
+                    });
+                },
+
+                initSpeech() {
+                    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                    if (SpeechRecognition) {
+                        this.recognition = new SpeechRecognition();
+                        this.recognition.continuous = false;
+                        this.recognition.interimResults = true;
+                        this.recognition.lang = 'en-US';
+
+                        this.recognition.onresult = (event) => {
+                            let transcript = '';
+                            for (let i = event.resultIndex; i < event.results.length; i++) {
+                                transcript += event.results[i][0].transcript;
+                            }
+                            this.userInput = transcript;
+                        };
+
+                        this.recognition.onerror = (event) => {
+                            console.error("STT Error:", event.error);
+                            this.isListening = false;
+                        };
+
+                        this.recognition.onend = () => {
+                            this.isListening = false;
+                        };
+                    }
+                },
+
+                toggleSpeech() {
+                    if (!this.recognition) this.initSpeech();
+                    if (!this.recognition) {
+                        alert("Web Speech API is not supported in this browser.");
+                        return;
+                    }
+
+                    if (this.isListening) {
+                        this.recognition.stop();
+                        this.isListening = false;
+                    } else {
+                        this.userInput = '';
+                        this.recognition.start();
+                        this.isListening = true;
+                    }
+                }
+            }
+        }
+    </script>
+</body>
+</html>
