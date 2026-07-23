@@ -65,6 +65,81 @@ bot.once('spawn', () => {
 });
 
 // =============================================================================
+// PILLAR 2: CARTOGRAPHER — Passive World Map Logger
+// Fires on every physics tick. Scans a 7x7x7 cube around the bot whenever it
+// moves >= 8 blocks. Discovered landmark blocks are POST'd to the Python brain
+// in a fire-and-forget call (no await — never blocks the game loop).
+// =============================================================================
+
+const CARTOGRAPHER_LANDMARKS = new Set([
+    // Overworld ores
+    'iron_ore', 'gold_ore', 'diamond_ore', 'coal_ore', 'lapis_ore',
+    'emerald_ore', 'redstone_ore', 'copper_ore',
+    'deepslate_iron_ore', 'deepslate_gold_ore', 'deepslate_diamond_ore',
+    'deepslate_coal_ore', 'deepslate_lapis_ore', 'deepslate_emerald_ore',
+    'deepslate_redstone_ore', 'deepslate_copper_ore',
+    // Nether / End
+    'ancient_debris', 'nether_gold_ore', 'nether_quartz_ore', 'end_portal_frame',
+    // Structures
+    'chest', 'trapped_chest', 'ender_chest', 'spawner', 'nether_portal',
+    // Environment
+    'lava', 'water',
+    // Player-placed infrastructure
+    'crafting_table', 'furnace', 'blast_furnace',
+]);
+
+const CARTOGRAPHER_SCAN_RADIUS = 3; // scans ±3 blocks in each axis (7x7x7 cube)
+const CARTOGRAPHER_MOVE_THRESHOLD = 8; // only scan after moving this many blocks
+let _lastCartographerPos = null;
+
+bot.on('physicTick', () => {
+    // Guard: bot must be fully spawned and positioned
+    if (!bot.entity || !bot.entity.position) return;
+
+    const pos = bot.entity.position;
+
+    // Only scan if the bot has moved far enough since last scan
+    if (_lastCartographerPos) {
+        const moved = pos.distanceTo(_lastCartographerPos);
+        if (moved < CARTOGRAPHER_MOVE_THRESHOLD) return;
+    }
+    _lastCartographerPos = pos.clone();
+
+    // Scan the cube for landmark blocks
+    const discovered = [];
+    for (let dx = -CARTOGRAPHER_SCAN_RADIUS; dx <= CARTOGRAPHER_SCAN_RADIUS; dx++) {
+        for (let dy = -CARTOGRAPHER_SCAN_RADIUS; dy <= CARTOGRAPHER_SCAN_RADIUS; dy++) {
+            for (let dz = -CARTOGRAPHER_SCAN_RADIUS; dz <= CARTOGRAPHER_SCAN_RADIUS; dz++) {
+                try {
+                    const block = bot.blockAt(pos.offset(dx, dy, dz));
+                    if (block && CARTOGRAPHER_LANDMARKS.has(block.name)) {
+                        discovered.push({
+                            name: block.name,
+                            x:    Math.round(block.position.x),
+                            y:    Math.round(block.position.y),
+                            z:    Math.round(block.position.z),
+                        });
+                    }
+                } catch (_) {
+                    // blockAt can throw on unloaded chunks — silently skip
+                }
+            }
+        }
+    }
+
+    if (discovered.length === 0) return;
+
+    // Fire-and-forget POST to Python brain — never awaited, never blocks physics tick
+    fetch('http://localhost:8000/agent/map/log', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ blocks: discovered, timestamp: Date.now() / 1000 }),
+    }).catch(() => {
+        // Silently discard — Python brain may be temporarily down during startup
+    });
+});
+
+// =============================================================================
 // ITEM ALIAS DICTIONARY & NORMALIZATION
 // =============================================================================
 
