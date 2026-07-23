@@ -284,7 +284,12 @@ bot.on('chat', (username, message) => {
 
 // =============================================================================
 // TELEMETRY ENDPOINT
+// Voyager blueprint: nearbyEntities sorted nearest→farthest; underground biome override.
 // =============================================================================
+
+// Surface block set used for Voyager underground biome detection
+const SURFACE_BLOCK_NAMES = new Set(['dirt', 'grass_block', 'sand', 'gravel', 'snow', 'mycelium']);
+const LOG_BLOCK_NAMES = new Set(['oak_log','birch_log','spruce_log','jungle_log','acacia_log','dark_oak_log','mangrove_log','cherry_log']);
 
 app.get('/api/telemetry', (req, res) => {
     try {
@@ -296,49 +301,76 @@ app.get('/api/telemetry', (req, res) => {
         const inventory = bot.inventory.items().map(item => ({
             name: item.name, count: item.count, slot: item.slot
         }));
+        const inventoryUsed = bot.inventory.items().length;
 
         const heldItem    = bot.heldItem ? bot.heldItem.name : null;
         const offHandItem = bot.inventory.slots[45] ? bot.inventory.slots[45].name : null;
         const armor = {
-            helmet:     bot.inventory.slots[5] ? bot.inventory.slots[5].name : null,
-            chestplate: bot.inventory.slots[6] ? bot.inventory.slots[6].name : null,
-            leggings:   bot.inventory.slots[7] ? bot.inventory.slots[7].name : null,
-            boots:      bot.inventory.slots[8] ? bot.inventory.slots[8].name : null
+            helmet:     bot.inventory.slots[5]  ? bot.inventory.slots[5].name  : null,
+            chestplate: bot.inventory.slots[6]  ? bot.inventory.slots[6].name  : null,
+            leggings:   bot.inventory.slots[7]  ? bot.inventory.slots[7].name  : null,
+            boots:      bot.inventory.slots[8]  ? bot.inventory.slots[8].name  : null
         };
 
+        // ── Biome detection with Voyager underground override ────────────────
+        // Voyager: if none of dirt|log|grass|sand|snow in nearby voxels → 'underground'
         let biomeName = 'unknown';
+        let voxelNames = [];
         try {
             const blockAtBot = bot.blockAt(pos);
             if (blockAtBot && blockAtBot.biome) biomeName = blockAtBot.biome.name || 'unknown';
+
+            // Scan a small 3x3x3 voxel cube for surface block presence
+            for (let dx = -1; dx <= 1; dx++) {
+                for (let dy = -1; dy <= 1; dy++) {
+                    for (let dz = -1; dz <= 1; dz++) {
+                        try {
+                            const b = bot.blockAt(pos.offset(dx, dy, dz));
+                            if (b && b.name !== 'air') voxelNames.push(b.name);
+                        } catch (_) {}
+                    }
+                }
+            }
+
+            // Voyager design invariant: no surface or log blocks visible → underground
+            const hasSurfaceBlock = voxelNames.some(n =>
+                SURFACE_BLOCK_NAMES.has(n) || LOG_BLOCK_NAMES.has(n)
+            );
+            if (!hasSurfaceBlock) biomeName = 'underground';
+
         } catch (_) {}
 
+        // ── Voyager: nearbyEntities sorted ascending by distance (nearest to farthest) ──
         const nearbyEntities = Object.values(bot.entities)
             .filter(e => e && e.position && e !== bot.entity && e.position.distanceTo(pos) <= 24)
             .map(e => ({
-                name: e.name || e.username || 'unknown',
-                type: e.type,
+                name:     e.name || e.username || 'unknown',
+                type:     e.type,
                 distance: Math.round(e.position.distanceTo(pos) * 10) / 10,
                 position: { x: Math.round(e.position.x), y: Math.round(e.position.y), z: Math.round(e.position.z) }
-            }));
+            }))
+            .sort((a, b) => a.distance - b.distance);  // Voyager: nearest to farthest
 
         res.json({
             status: 'success',
             telemetry: {
-                health: bot.health,
-                food: bot.food,
-                saturation: bot.foodSaturation,
+                health:       bot.health,
+                food:         bot.food,
+                saturation:   bot.foodSaturation,
                 position: {
                     x: Math.round(pos.x * 10) / 10,
                     y: Math.round(pos.y * 10) / 10,
                     z: Math.round(pos.z * 10) / 10
                 },
-                biome: biomeName,
-                timeOfDay: bot.time ? bot.time.timeOfDay : 0,
-                isRaining: bot.isRaining || false,
+                biome:        biomeName,             // may be 'underground' via override
+                timeOfDay:    bot.time ? bot.time.timeOfDay : 0,
+                isRaining:    bot.isRaining || false,
                 inventory,
-                equipped: { hand: heldItem, offhand: offHandItem, armor },
-                gameMode: bot.game ? bot.game.gameMode : 'survival',
-                nearbyEntities: nearbyEntities.slice(0, 20)
+                inventoryUsed,                       // Voyager overflow guard needs this
+                voxels:       [...new Set(voxelNames)].slice(0, 24),
+                equipped:     { hand: heldItem, offhand: offHandItem, armor },
+                gameMode:     bot.game ? bot.game.gameMode : 'survival',
+                nearbyEntities: nearbyEntities.slice(0, 20)  // already distance-sorted
             }
         });
     } catch (err) {
@@ -496,6 +528,140 @@ app.post('/api/execute-script', async (req, res) => {
         }
     });
 
+    // ==========================================================================
+    // VOYAGER CONTROL PRIMITIVES — injected into every sandbox execution
+    // These wrap raw Mineflayer APIs with pathfinding, error recovery, and
+    // inventory pre-checks. Generated code MUST call these instead of bot.dig,
+    // bot.craft, bot.openFurnace, bot.placeBlock, or bot.attack directly.
+    // ==========================================================================
+
+    /**
+     * mineBlock(bot, name, count) — find and collect `count` blocks of `name`.
+     * Uses collectBlock plugin for safe gathering with pathfinding.
+     */
+    async function mineBlock(proxyBot, name, count = 1) {
+        const mcD = require('minecraft-data')(proxyBot.version);
+        const blockType = mcD.blocksByName[name];
+        if (!blockType) throw new Error(`mineBlock: unknown block '${name}'`);
+        let collected = 0;
+        while (collected < count) {
+            const block = proxyBot.findBlock({ matching: blockType.id, maxDistance: 32 });
+            if (!block) throw new Error(`mineBlock: no '${name}' found within 32 blocks`);
+            await proxyBot.collectBlock.collect(block);
+            collected++;
+        }
+        proxyBot.chat(`Mined ${count} ${name}.`);
+    }
+
+    /**
+     * craftItem(bot, name, count) — craft `count` of item `name`.
+     * Automatically paths to a crafting table if the recipe requires one.
+     */
+    async function craftItem(proxyBot, name, count = 1) {
+        const mcD = require('minecraft-data')(proxyBot.version);
+        const itemDef = mcD.itemsByName[name];
+        if (!itemDef) throw new Error(`craftItem: unknown item '${name}'`);
+        const recipes = proxyBot.recipesFor(itemDef.id, null, 1, false);
+        if (!recipes || recipes.length === 0)
+            throw new Error(`craftItem: no recipe for '${name}' with current inventory`);
+        const recipe = recipes[0];
+        let craftingTable = null;
+        if (recipe.requiresTable) {
+            craftingTable = proxyBot.findBlock({ matching: mcD.blocksByName.crafting_table.id, maxDistance: 4 });
+            if (!craftingTable) {
+                const far = proxyBot.findBlock({ matching: mcD.blocksByName.crafting_table.id, maxDistance: 32 });
+                if (!far) throw new Error(`craftItem: '${name}' needs a crafting table but none found within 32 blocks`);
+                await proxyBot.pathfinder.goto(new Vec3(far.position.x, far.position.y, far.position.z));
+                craftingTable = far;
+            }
+        }
+        await proxyBot.craft(recipe, count, craftingTable);
+        proxyBot.chat(`Crafted ${count} ${name}.`);
+    }
+
+    /**
+     * smeltItem(bot, name, count) — smelt `count` of `name` in the nearest furnace.
+     */
+    async function smeltItem(proxyBot, name, count = 1) {
+        const mcD = require('minecraft-data')(proxyBot.version);
+        const furnaceBlock = proxyBot.findBlock({
+            matching: [mcD.blocksByName.furnace?.id, mcD.blocksByName.blast_furnace?.id].filter(Boolean),
+            maxDistance: 32
+        });
+        if (!furnaceBlock) throw new Error(`smeltItem: no furnace found within 32 blocks`);
+        await proxyBot.pathfinder.goto(new Vec3(
+            furnaceBlock.position.x, furnaceBlock.position.y, furnaceBlock.position.z
+        ));
+        const furnace = await proxyBot.openFurnace(furnaceBlock);
+        const inputItem = proxyBot.inventory.items().find(i => i.name.includes(name));
+        if (!inputItem) { await furnace.close(); throw new Error(`smeltItem: '${name}' not in inventory`); }
+        await furnace.putInput(inputItem.type, null, count);
+        // Wait for smelting (roughly 10s per item)
+        await new Promise(r => setTimeout(r, count * 10000 + 2000));
+        const result = furnace.outputItem();
+        if (result) await furnace.takeOutput();
+        await furnace.close();
+        proxyBot.chat(`Smelted ${count} ${name}.`);
+    }
+
+    /**
+     * placeItem(bot, name, position) — place block `name` at Vec3 position.
+     */
+    async function placeItem(proxyBot, name, position) {
+        const item = proxyBot.inventory.items().find(i => i.name === name || i.name.includes(name));
+        if (!item) throw new Error(`placeItem: '${name}' not in inventory`);
+        await proxyBot.equip(item, 'hand');
+        const refBlock = proxyBot.blockAt(position.offset(0, -1, 0));
+        if (!refBlock) throw new Error(`placeItem: no reference block below ${JSON.stringify(position)}`);
+        await proxyBot.placeBlock(refBlock, new Vec3(0, 1, 0));
+        proxyBot.chat(`Placed ${name}.`);
+    }
+
+    /**
+     * killMob(bot, name, timeout) — locate and kill the nearest mob of `name`.
+     */
+    async function killMob(proxyBot, name, timeout = 30000) {
+        const target = proxyBot.nearestEntity(e =>
+            e && e.name && e.name.toLowerCase().includes(name.toLowerCase()) &&
+            e.position.distanceTo(proxyBot.entity.position) < 24
+        );
+        if (!target) throw new Error(`killMob: no '${name}' found nearby`);
+        const weapon = proxyBot.inventory.items().find(i => i.name.includes('sword') || i.name.includes('axe'));
+        if (weapon) await proxyBot.equip(weapon, 'hand');
+        proxyBot.pvp.attack(target);
+        proxyBot.chat(`Attacking ${name}!`);
+        // Wait for mob death or timeout
+        await new Promise((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error(`killMob: timeout killing ${name}`)), timeout);
+            const check = setInterval(() => {
+                if (!target.isValid) { clearInterval(check); clearTimeout(timer); resolve(); }
+            }, 500);
+        });
+    }
+
+    /**
+     * exploreUntil(bot, direction, maxDistance, callback)
+     * Move in direction [dx,dy,dz] until callback() returns truthy or maxDistance blocks walked.
+     * Voyager blueprint: always call this when you cannot find a block nearby.
+     */
+    async function exploreUntil(proxyBot, direction, maxDistance, callback) {
+        const [dx, dy, dz] = direction;
+        const start = proxyBot.entity.position.clone();
+        let walked = 0;
+        const STEP = 16;
+        while (walked < maxDistance) {
+            const target = proxyBot.entity.position.offset(
+                dx * STEP, dy * STEP, dz * STEP
+            );
+            try {
+                await proxyBot.pathfinder.goto(new goals.GoalNear(target.x, target.y, target.z, 2));
+            } catch (_) { /* pathfinder may fail on terrain — keep going */ }
+            walked = proxyBot.entity.position.distanceTo(start);
+            if (callback && callback()) break;
+        }
+        proxyBot.chat(`Explored ${Math.round(walked)} blocks.`);
+    }
+
     // C-2, C-3: Minimal, explicit sandbox — no fetch, no Object/Array/String/Number/Boolean constructors
     // (Primitive literals like [], {}, '', 0, true still work inside vm without exposing host constructors)
     const sandbox = {
@@ -506,6 +672,13 @@ app.post('/api/execute-script', async (req, res) => {
         Movements,
         mcData,
         normalizeItemName,
+        // Voyager control primitives — always available, always preferred over raw Mineflayer API
+        mineBlock:        (name, count)         => mineBlock(safeBotProxy, name, count),
+        craftItem:        (name, count)         => craftItem(safeBotProxy, name, count),
+        smeltItem:        (name, count)         => smeltItem(safeBotProxy, name, count),
+        placeItem:        (name, pos)           => placeItem(safeBotProxy, name, pos),
+        killMob:          (name, timeout)       => killMob(safeBotProxy, name, timeout),
+        exploreUntil:     (dir, maxD, cb)      => exploreUntil(safeBotProxy, dir, maxD, cb),
         console:          customConsole,
         setTimeout:       trackedSetTimeout,   // H-3: tracked
         clearTimeout:     trackedClearTimeout,

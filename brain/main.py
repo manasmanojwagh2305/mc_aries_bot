@@ -127,9 +127,12 @@ class SkillLibraryManager:
         self._save_json_skills()
         if self.use_chroma:
             try:
+                # Voyager invariant: embed ONLY the description (natural language prose stub).
+                # The description is what gets cosine-searched at retrieval time.
+                # The code is returned separately from the skills dict — never embedded.
                 self.chroma_collection.upsert(
                     ids=[skill_id],
-                    documents=[f"{name} {description}"],
+                    documents=[description],
                     metadatas=[{"name": name, "sub_goal": meta.get("sub_goal", name)}],
                 )
             except Exception as e:
@@ -152,7 +155,9 @@ class SkillLibraryManager:
         qv = self._to_vec(query)
         scored = []
         for data in self.skills.values():
-            dv = self._to_vec(f"{data['name']} {data['description']}")
+            # Voyager: cosine-search on description (natural language), not name+code.
+            # Description is the indexed representation; code is the retrieved payload.
+            dv = self._to_vec(data.get('description', data.get('name', '')))
             scored.append((self._cosine(qv, dv), data))
         scored.sort(key=lambda x: x[0], reverse=True)
         return [d for s, d in scored if s > 0.05][:top_k]
@@ -163,9 +168,61 @@ class SkillLibraryManager:
 
 skill_library = SkillLibraryManager()
 
+
 # =============================================================================
-# GLOBAL STATE — updated with Pillars 1, 2, 4 new keys
+# VOYAGER SKILL DESCRIPTION GENERATOR
+# Mirrors voyager/prompts/skill.txt — auto-generates a natural-language docstring
+# stub from raw JS code before persisting to the vector library.
+# Model: llama-3.1-8b-instant (Voyager's GPT-3.5-turbo equivalent for this task).
 # =============================================================================
+
+async def generate_skill_description_llm(
+    program_name: str,
+    program_code: str,
+) -> str:
+    """
+    Generates a Voyager-style description stub for a learned skill.
+
+    Voyager output format (description field stored + embedded in vector DB):
+      async function {name}(bot) {
+          // <prose description — max 6 sentences, no function name, no bot.chat mentions>
+      }
+
+    On LLM failure: returns a minimal fallback stub so the skill is still saved.
+    """
+    prompt = (
+        f"{program_code[:3000]}\n\n"
+        f"The main function is `{program_name}`."
+    )
+    try:
+        response = await asyncio.to_thread(
+            client.chat.completions.create,
+            model="llama-3.1-8b-instant",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a helpful assistant that writes a description of a "
+                        "Mineflayer JavaScript function.\n"
+                        "Do not mention the function name.\n"
+                        "Do not mention anything about bot.chat or helper functions.\n"
+                        "There might be some helper functions before the main function, "
+                        "but you only need to describe the main function.\n"
+                        "Try to summarize the function in no more than 6 sentences.\n"
+                        "Your response must be a single line of text — no newlines."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.0,
+            max_tokens=200,
+        )
+        raw_desc = response.choices[0].message.content.strip().replace("\n", " ")
+        # Voyager wraps the description as a docstring stub
+        return f"async function {program_name}(bot) {{\n    // {raw_desc}\n}}"
+    except Exception as e:
+        print(f"[SkillDesc] LLM call failed ({e}), using fallback stub.")
+        return f"async function {program_name}(bot) {{\n    // Learned skill: {program_name}\n}}"
 
 CURRICULUM_STATE: Dict[str, Any] = {
     # Core (existing)
@@ -457,56 +514,85 @@ Respond with EXACTLY this JSON (no markdown, no prose outside the JSON):
 async def generate_js_code(
     subgoal: str,
     telemetry: Optional[Dict[str, Any]],
-    critic_context: Optional[Dict[str, Any]] = None,  # Pillar 4: structured critique
+    critic_context: Optional[Dict[str, Any]] = None,
     failed_code: Optional[str] = None,
+    chat_log: Optional[str] = None,   # Voyager §4.4: augments RAG query on retry
 ) -> str:
     """
-    Generates Mineflayer JS for a subgoal.
+    Generates Mineflayer JS for a subgoal — Voyager ActionAgent equivalent.
 
-    Pillar 3 (RAG): Retrieves top-2 relevant skills from the vector library
-    and pre-injects them as callable async helper functions into the generated code.
-
-    Pillar 4 (Critic): If critic_context is provided, replaces the raw error
-    string with a rich structured diagnosis that steers the rewrite.
+    Voyager design invariants implemented here:
+    - Control primitive signatures always injected into system prompt (§2.2)
+    - Raw Mineflayer API calls banned: bot.dig/craft/openFurnace/placeBlock/attack (§2.3)
+    - Skill code injected as-is from library (not double-wrapped) (§4.5)
+    - On retry, RAG query augmented with chat log / missing-items summary (§4.4)
+    - top_k=3 matching Voyager's retrieval_top_k default (§4.2)
     """
     telemetry_str = json.dumps(telemetry, indent=2)[:2000] if telemetry else "Unavailable"
 
-    # ── Pillar 3: RAG skill retrieval & injection ──────────────────────────
-    relevant_skills = skill_library.query_skill(subgoal, top_k=2)
+    # ── Pillar 3: Voyager §4.4 — augment RAG query on retry with chat log ──
+    # On first attempt: query = subgoal
+    # On retry: query = subgoal + "\n\nMissing/needed: " + chat_log summary
+    rag_query = subgoal
+    if chat_log and (critic_context or failed_code):
+        rag_query = f"{subgoal}\n\nMissing/needed based on execution log: {chat_log[:500]}"
+
+    relevant_skills = skill_library.query_skill(rag_query, top_k=3)  # Voyager default: top_k=5, we use 3
     skill_header = ""
     skill_hint_lines: List[str] = []
 
     if relevant_skills:
-        skill_header = "// ═══ INJECTED SKILLS (call these — don't reimplement) ═══\n"
+        # Voyager §4.5: inject retrieved skill CODE strings as-is (not double-wrapped).
+        # Skills are already stored as complete "async function name(bot) { ... }" definitions.
+        # The generated code calls them directly: await skillFnName(bot).
+        skill_header = (
+            "// ═══ RETRIEVED SKILL LIBRARY (top-k — call these instead of reimplementing) ═══\n"
+            "// These are learned async functions. Call them with: await functionName(bot)\n\n"
+        )
         for skill in relevant_skills:
             fn_name = skill.get("js_fn_name") or re.sub(r'[^\w]', '_', skill['name'].lower())[:48]
-            skill_header += (
-                f"async function {fn_name}() {{\n"
-                f"  // Learned skill: {skill['description']}\n"
-                f"  {skill['code']}\n"
-                f"}}\n\n"
-            )
+            # Inject the raw stored code — already a complete async function definition
+            skill_header += skill.get("code", f"// skill '{fn_name}' has no stored code") + "\n\n"
+            desc_preview = skill.get("description", skill["name"])[:80]
             skill_hint_lines.append(
-                f"  - await {fn_name}()  ← \"{skill['description']}\""
+                f"  - await {fn_name}(bot)  ← \"{desc_preview}\""
             )
 
     skill_hint = ""
     if skill_hint_lines:
         skill_hint = (
-            "AVAILABLE PRE-BUILT HELPERS (call these instead of reimplementing):\n"
+            "RETRIEVED SKILLS YOU CAN CALL (do not reimplement these):\n"
             + "\n".join(skill_hint_lines) + "\n\n"
         )
 
-    # ── Pillar 4: Critic context block ────────────────────────────────────
+    # ── Voyager §2.2: Control primitives always enumerated in the system prompt ──
+    PRIMITIVES_BLOCK = (
+        "CONTROL PRIMITIVES — always prefer these over raw Mineflayer calls:\n"
+        "  await mineBlock(name, count)          — mine blocks (handles pathfinding, collectBlock)\n"
+        "  await craftItem(name, count)          — craft items (handles crafting table pathfinding)\n"
+        "  await smeltItem(name, count)          — smelt in nearest furnace\n"
+        "  await placeItem(name, position)       — place block at Vec3 position\n"
+        "  await killMob(name, timeout)          — fight nearest mob by name\n"
+        "  await exploreUntil(dir, maxDist, cb)  — explore [dx,dy,dz] until callback returns true\n"
+        "  exploreUntil: pick random direction from [1,0,1],[−1,0,1],[1,0,−1],[−1,0,−1]\n"
+        "  maxDistance for bot.findBlock/findBlocks must always be 32 (Voyager rule)\n\n"
+        "BANNED — these throw a sandbox error:\n"
+        "  bot.dig(), bot.craft(), bot.openFurnace(), bot.placeBlock(), bot.attack()\n"
+        "  bot.on(), bot.once()  (no event listeners inside generated code)\n"
+        "  fetch(), require() beyond vec3/minecraft-data/mineflayer-pathfinder\n"
+        "  Infinite loops and recursive functions are forbidden.\n"
+    )
+
+    # ── Pillar 4: Critic context block ──────────────────────────────────────
     critic_block = ""
     if critic_context and failed_code:
         avoid_list = "\n".join(
             f"  ✗ {p}" for p in critic_context.get("avoid_patterns", [])
         )
         critic_block = f"""
-═══ CRITIC AGENT DIAGNOSIS (study this before rewriting) ═══
-Root cause:     {critic_context.get('failure_reason', 'Unknown')}
-Fix directive:  {critic_context.get('suggested_fix', 'None')}
+═══ CRITIC AGENT DIAGNOSIS (study before rewriting) ═══
+Root cause:    {critic_context.get('failure_reason', 'Unknown')}
+Fix directive: {critic_context.get('suggested_fix', 'None')}
 Patterns to AVOID in your rewrite:
 {avoid_list or '  (none specified)'}
 
@@ -516,49 +602,58 @@ Previously failed code (do NOT repeat verbatim):
 ```
 """
 
-    # ── Prompt construction ────────────────────────────────────────────────
+    # ── Prompt construction — Voyager response format ────────────────────────
+    # Voyager ActionAgent uses: Explain → Plan → Code sections.
+    # We adopt this structure so the model thinks step-by-step before coding.
     if critic_context and failed_code:
-        prompt_body = f"""You are rewriting a failed Mineflayer script.
+        prompt_body = f"""You are rewriting a failed Mineflayer script for a Minecraft bot.
+
 {critic_block}
 {skill_hint}
-Current Bot Telemetry:
+{PRIMITIVES_BLOCK}
+Current Bot State:
 {telemetry_str}
 
-Subgoal to accomplish: {subgoal}
+Task (subgoal to accomplish): {subgoal}
 
-Rules:
-1. Output ONLY raw JavaScript — no markdown backticks, no explanations, no comments beyond inline.
-2. Use await on ALL async Mineflayer operations.
-3. Use exact Minecraft item IDs (oak_planks, oak_log, stone_pickaxe, crafting_table).
-4. Validate inventory before using items: const item = bot.inventory.items().find(i => i.name === 'x'); if (!item) throw new Error('x not in inventory');
-5. If calling a HELPER FUNCTION, call it with: await helperName();
-6. Do NOT use fetch() — it is blocked in the sandbox.
+Response format:
+Explain: Why did the previous code fail? What needs to change?
+Plan:
+1) ...
+2) ...
+Code:
+<raw JavaScript only — no backticks, no markdown fences>
+
+The Code section must be a single async function named meaningfully (matching the task).
+Main function signature: async function yourFunctionName(bot) {{ ... }}
+Call it at the end with: await yourFunctionName(bot);
 """
     else:
-        prompt_body = f"""You are writing a self-contained Mineflayer JavaScript snippet.
+        prompt_body = f"""You are writing Mineflayer JavaScript for a Minecraft bot to complete a task.
 
-Subgoal: {subgoal}
+Task (subgoal): {subgoal}
 
 {skill_hint}
-Available sandbox variables:
-  bot       — Mineflayer bot instance (whitelisted proxy)
-  Vec3      — vec3 constructor
-  pathfinder, goals, Movements — mineflayer-pathfinder
-  mcData    — minecraft-data instance
-  normalizeItemName — item alias normalizer
-  console   — custom logger (log/error/warn)
-
-Current Bot Telemetry:
+{PRIMITIVES_BLOCK}
+Current Bot State:
 {telemetry_str}
 
+Response format:
+Explain: Brief reasoning about available inventory and what steps are needed.
+Plan:
+1) ...
+2) ...
+Code:
+<raw JavaScript only — no backticks, no markdown fences>
+
+The Code section must be a single async function named meaningfully (matching the task).
+Main function signature: async function yourFunctionName(bot) {{ ... }}
+Call it at the end with: await yourFunctionName(bot);
 Rules:
-1. Output ONLY raw JavaScript — no markdown backticks, no explanations.
-2. Use await on ALL async Mineflayer operations.
-3. Use exact Minecraft item IDs (oak_planks, oak_log, stone_pickaxe, crafting_table, etc).
-4. Validate inventory before using items: const item = bot.inventory.items().find(i => i.name === 'x'); if (!item) throw new Error('x not in inventory');
-5. If calling a HELPER FUNCTION, call it with: await helperName();
-6. Do NOT use fetch() — it is blocked in the sandbox.
-7. For crafting, use: const r = bot.recipesFor(mcData.itemsByName['oak_planks'].id, null, 1, false); if (r.length) await bot.craft(r[0], 4, null);
+- Check inventory before using items; throw if missing.
+- Use exact Minecraft item IDs: oak_log, oak_planks, crafting_table, stone_pickaxe.
+- Do NOT use raw bot.craft/dig/placeBlock/attack — use the primitives above.
+- Call exploreUntil() if a block is not found nearby before giving up.
 """
 
     try:
@@ -568,27 +663,38 @@ Rules:
             messages=[
                 {
                     "role": "system",
-                    "content": "Output strictly raw executable Mineflayer JavaScript. No markdown. No backticks. No prose.",
+                    "content": (
+                        "You are a Mineflayer JavaScript expert. "
+                        "Output ONLY raw executable JavaScript in the Code section. "
+                        "No markdown code fences. No backticks. No prose outside the "
+                        "Explain/Plan/Code structure."
+                    ),
                 },
                 {"role": "user", "content": prompt_body},
             ],
-            temperature=0.15,
+            temperature=0.0,   # Voyager uses temperature=0 for ActionAgent
             max_tokens=2048,
         )
-        code = response.choices[0].message.content.strip()
-        # Strip accidental fences
+        raw = response.choices[0].message.content.strip()
+
+        # Extract only the Code section from the Explain/Plan/Code response
+        code = raw
+        if "Code:" in raw:
+            code = raw.split("Code:", 1)[1].strip()
+        # Strip accidental fences if the model still adds them
         if code.startswith("```"):
             lines = code.splitlines()
             lines = lines[1:] if lines[0].startswith("```") else lines
             lines = lines[:-1] if lines and lines[-1].startswith("```") else lines
             code = "\n".join(lines).strip()
 
-        # Pillar 3: Prepend injected skill helpers to the generated code
+        # Voyager §4.5: Prepend retrieved skill code before the generated script
         return skill_header + code if skill_header else code
 
     except Exception as e:
         print(f"[CodeGen] Error: {e}")
         return "// Code generation failed — LLM error."
+
 
 # =============================================================================
 # ███████████████████████████████████████████████████████████████████████████
@@ -617,6 +723,7 @@ async def run_iterative_execution_loop(subgoal: str) -> bool:
             print(f"[ExecLoop] Reusing skill: '{existing[0]['name']}'")
 
         critic_context: Optional[Dict[str, Any]] = None  # grows richer each failure
+        last_chat_log:  Optional[str] = None              # Voyager §4.4: augments retry RAG query
         max_attempts = 4
         success = False
 
@@ -625,17 +732,22 @@ async def run_iterative_execution_loop(subgoal: str) -> bool:
 
             pre_telemetry = await fetch_telemetry()
 
-            # (Re)generate code if this is a retry or no cached skill
+            # (Re)generate code if this is a retry or no cached skill.
+            # On retry: pass chat_log to augment the RAG query (Voyager §4.4)
             if not attempt_code or attempt > 1:
                 attempt_code = await generate_js_code(
                     subgoal=subgoal,
                     telemetry=pre_telemetry,
-                    critic_context=critic_context,   # Pillar 4: pass structured critique
+                    critic_context=critic_context,
                     failed_code=attempt_code,
+                    chat_log=last_chat_log,   # Voyager §4.4: enriches RAG on retry
                 )
 
-            res           = await execute_js_script(attempt_code, timeout_ms=45000)
+            res            = await execute_js_script(attempt_code, timeout_ms=45000)
             post_telemetry = await fetch_telemetry()
+
+            # Voyager §4.4: capture sandbox chat log for augmented retry RAG query
+            last_chat_log = res.get("logs") or ""
 
             if res.get("status") == "success":
                 verified, diff_msg = verify_telemetry_diff(
@@ -643,9 +755,15 @@ async def run_iterative_execution_loop(subgoal: str) -> bool:
                 )
                 if verified:
                     print(f"[ExecLoop] ✓ SUCCESS '{subgoal}' — {diff_msg}")
+                    # Voyager §4.2: generate proper LLM description before persisting skill
+                    js_fn_name = re.sub(r'[^\w]', '_', subgoal.lower().replace(' ', '_'))[:48]
+                    skill_description = await generate_skill_description_llm(
+                        program_name=js_fn_name,
+                        program_code=attempt_code,
+                    )
                     skill_library.add_skill(
                         name=subgoal,
-                        description=f"Mineflayer script for: {subgoal}",
+                        description=skill_description,   # LLM-generated docstring stub
                         code=attempt_code,
                         metadata={"sub_goal": subgoal},
                     )
@@ -658,7 +776,7 @@ async def run_iterative_execution_loop(subgoal: str) -> bool:
                 else:
                     error_msg = f"Telemetry diff failed: {diff_msg}"
             else:
-                error_msg = res.get("message") or res.get("logs") or "Unknown execution error."
+                error_msg = res.get("message") or last_chat_log or "Unknown execution error."
 
             print(f"[ExecLoop] ✗ Attempt {attempt} failed: {error_msg}")
             CURRICULUM_STATE["last_error"] = f"Attempt {attempt}: {error_msg}"
@@ -756,10 +874,27 @@ async def determine_next_subgoal_llm(
       }
     Gracefully falls back to the heuristic on any LLM error.
     """
-    inv_str = json.dumps(
-        {i["name"]: i["count"] for i in telemetry.get("inventory", [])},
-        indent=2,
-    ) if telemetry else "unknown"
+    # Voyager §3.2: Early-task inventory masking
+    # When fewer than 7 tasks are completed, only show core survival items.
+    # This prevents the LLM being overwhelmed by an unfamiliar early-game state.
+    CORE_ITEM_PATTERN = re.compile(
+        r'.*_log|.*_planks|stick|crafting_table|furnace|cobblestone|dirt|coal'
+        r'|.*_pickaxe|.*_sword|.*_axe|raw_iron|raw_gold|iron_ingot'
+    )
+    raw_inventory = {i["name"]: i["count"] for i in telemetry.get("inventory", [])} if telemetry else {}
+    if len(completed) < 7:
+        masked_inv = {k: v for k, v in raw_inventory.items() if CORE_ITEM_PATTERN.match(k)}
+        inv_str = json.dumps(masked_inv, indent=2) if masked_inv else "(empty — early game)"
+    else:
+        inv_str = json.dumps(raw_inventory, indent=2) if raw_inventory else "(empty)"
+
+    # Voyager biome override: if biome is 'underground' (set by bot.js surface-block heuristic)
+    # add a note so the planner doesn't propose surface tasks like "collect sand".
+    biome_str = telemetry.get("biome", "unknown") if telemetry else "unknown"
+    underground_note = (
+        "NOTE: Bot is currently underground. Propose mining or caving tasks, "
+        "not surface collection tasks."
+    ) if biome_str == "underground" else ""
 
     prompt = f"""You are the curriculum planner for Aries, an autonomous Minecraft agent.
 Choose ONE concrete next action given the world state below.
@@ -770,10 +905,11 @@ Choose ONE concrete next action given the world state below.
 ═══ BOT STATE ═══
 Health:     {telemetry.get("health", "?")}/20
 Food:       {telemetry.get("food",   "?")}/20
-Biome:      {telemetry.get("biome",  "unknown")}
+Biome:      {biome_str}{" (underground — surface blocks absent)" if biome_str == "underground" else ""}
 Time:       {telemetry.get("timeOfDay", "?")} (0=dawn, 6000=noon, 12000=dusk, 18000=night)
 Raining:    {telemetry.get("isRaining", False)}
 Position:   {json.dumps(telemetry.get("position", {}))}
+{underground_note}
 
 ═══ INVENTORY ═══
 {inv_str}
@@ -892,42 +1028,73 @@ async def curriculum_planner_loop():
                         from_pos=bot_pos, max_entries=18
                     )
 
-                    # ── Pillar 1: LLM Curriculum decides next subgoal ──────
-                    decision = await determine_next_subgoal_llm(
-                        master_goal=CURRICULUM_STATE["master_goal"],
-                        telemetry=telemetry,
-                        completed=CURRICULUM_STATE["completed_subgoals"],
-                        failed=CURRICULUM_STATE["failed_subgoals"],
-                        world_summary=world_summary,
-                        last_rationale=CURRICULUM_STATE.get("last_rationale"),
-                    )
-
-                    next_subgoal   = decision["subgoal"]
-                    curiosity      = decision["curiosity_score"]
-                    CURRICULUM_STATE["last_rationale"]  = decision["rationale"]
-                    CURRICULUM_STATE["curiosity_score"] = curiosity
-
-                    # ── Curiosity / stale override → force exploration ─────
-                    if curiosity >= EXPLORATION_CURIOSITY_THRESHOLD or stale >= STALE_TICK_THRESHOLD:
-                        direction = ["north", "south", "east", "west"][stale % 4]
-                        next_subgoal = (
-                            f"Explore {direction} for 80 blocks, logging any new biomes, "
-                            f"ores, or structures discovered."
+                    # ── Voyager §3.1: Inventory overflow guard — bypass LLM ──
+                    # If inventory is nearly full (>= 33/36 slots used), Voyager
+                    # hardcodes a deposit task instead of calling the curriculum LLM.
+                    inv_used = telemetry.get("inventoryUsed", 0)
+                    if inv_used >= 33:
+                        chest_records = world_map.query_nearest(
+                            "chest", bot_pos or {"x": 0, "y": 64, "z": 0}, max_results=1
                         )
+                        if chest_records:
+                            cx = chest_records[0]["x"]
+                            cy = chest_records[0]["y"]
+                            cz = chest_records[0]["z"]
+                            overflow_goal = (
+                                f"Deposit useless items into the chest at ({cx}, {cy}, {cz})"
+                            )
+                        else:
+                            overflow_goal = "Craft 1 chest and place it nearby to store excess items"
                         print(
-                            f"[Planner] Curiosity={curiosity}, stale={stale} → "
-                            f"overriding to: '{next_subgoal}'"
+                            f"[Planner] ⚠ Inventory overflow ({inv_used}/36) → "
+                            f"forcing: '{overflow_goal}'"
                         )
-                        CURRICULUM_STATE["stale_ticks"] = 0  # reset after exploration trigger
+                        if (
+                            overflow_goal not in CURRICULUM_STATE["completed_subgoals"]
+                            and overflow_goal not in CURRICULUM_STATE["failed_subgoals"]
+                        ):
+                            asyncio.create_task(run_iterative_execution_loop(overflow_goal))
+                    else:
+                        # ── Pillar 1: LLM Curriculum decides next subgoal ──────
+                        decision = await determine_next_subgoal_llm(
+                            master_goal=CURRICULUM_STATE["master_goal"],
+                            telemetry=telemetry,
+                            completed=CURRICULUM_STATE["completed_subgoals"],
+                            failed=CURRICULUM_STATE["failed_subgoals"],
+                            world_summary=world_summary,
+                            last_rationale=CURRICULUM_STATE.get("last_rationale"),
+                        )
 
-                    # ── Schedule only if not already completed or failed ───
-                    if (
-                        next_subgoal
-                        and next_subgoal not in CURRICULUM_STATE["completed_subgoals"]
-                        and next_subgoal not in CURRICULUM_STATE["failed_subgoals"]
-                    ):
-                        print(f"[Planner] Scheduling: '{next_subgoal}' | rationale: {decision['rationale'][:80]}")
-                        asyncio.create_task(run_iterative_execution_loop(next_subgoal))
+                        next_subgoal   = decision["subgoal"]
+                        curiosity      = decision["curiosity_score"]
+                        CURRICULUM_STATE["last_rationale"]  = decision["rationale"]
+                        CURRICULUM_STATE["curiosity_score"] = curiosity
+
+                        # ── Curiosity / stale override → force exploration ─────
+                        if curiosity >= EXPLORATION_CURIOSITY_THRESHOLD or stale >= STALE_TICK_THRESHOLD:
+                            direction = ["north", "south", "east", "west"][stale % 4]
+                            next_subgoal = (
+                                f"Explore {direction} for 80 blocks, logging any new biomes, "
+                                f"ores, or structures discovered."
+                            )
+                            print(
+                                f"[Planner] Curiosity={curiosity}, stale={stale} → "
+                                f"overriding to: '{next_subgoal}'"
+                            )
+                            CURRICULUM_STATE["stale_ticks"] = 0
+
+                        if (
+                            next_subgoal
+                            and next_subgoal not in CURRICULUM_STATE["completed_subgoals"]
+                            and next_subgoal not in CURRICULUM_STATE["failed_subgoals"]
+                        ):
+                            print(
+                                f"[Planner] Scheduling: '{next_subgoal}' | "
+                                f"rationale: {decision['rationale'][:80]}"
+                            )
+                            asyncio.create_task(run_iterative_execution_loop(next_subgoal))
+
+
 
         except Exception as e:
             print(f"[CurriculumPlanner Error] {e}")
