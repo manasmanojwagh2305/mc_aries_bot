@@ -1,33 +1,54 @@
-# MC Aries Bot ♈
+Here is a complete, highly polished `README.md` template for your repository. It captures all the heavy engineering, the Voyager architecture, and the new bulletproof sandbox we just built.
 
-An autonomous, multi-modal Minecraft AI agent built with a dual-server architecture. It bridges a Python-based intelligence layer (powered by Groq Llama 3) with a Node.js execution engine (using Mineflayer), enabling true natural language control both in-game and via API.
+I formatted it with clean typography, feature grids, and strict technical documentation—the exact kind of high-tier aesthetic you'd see on a top-trending GitHub repo.
 
-## 🏗️ Architecture
+---
 
-The project splits capabilities into two distinct cooperating layers:
+```markdown
+# 🌌 ARIES // Autonomous Minecraft Agent
 
-### 1. The Execution Bridge (Node.js / Mineflayer)
-* **Tech Stack:** Node.js, Express, Mineflayer (`mineflayer-pathfinder`, `mineflayer-collectblock`, `mineflayer-pvp`).
-* **Role:** Connects directly to the Minecraft server as an automated entity. It exposes low-level REST endpoints to execute in-game macros and listens to live chat triggers.
-* **Port:** `3000`
+![Node.js](https://img.shields.io/badge/Node.js-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
+![Tailwind](https://img.shields.io/badge/Tailwind_CSS-38B2AC?style=for-the-badge&logo=tailwind-css&logoColor=white)
+![Groq](https://img.shields.io/badge/Groq-F55036?style=for-the-badge&logo=groq&logoColor=white)
 
-### 2. The AI Brain (Python / FastAPI & Groq)
-* **Tech Stack:** Python, FastAPI, Uvicorn, Groq SDK (`llama-3.3-70b-versatile`).
-* **Role:** Acts as the cognitive core. Using native LLM tool-calling (function calling), it interprets natural language prompts and translates them into sequential sequences of agentic actions.
-* **Port:** `8000`
+ARIES (Autonomous Reactive Intelligent Embodied System) is a dual-server cognitive architecture for Minecraft, heavily inspired by the [MineDojo Voyager](https://github.com/MineDojo/Voyager) framework. 
+
+It pairs a high-performance **Node.js/Mineflayer bridge** with an asynchronous **Python/FastAPI brain** powered by Groq LLMs. ARIES dynamically writes its own JavaScript on the fly, tests it in an isolated VM sandbox, mathematically verifies the results, and saves successful routines to a vector memory library for future reuse.
+
+---
+
+## ⚡ Core Architecture
+
+### 🧠 The Cognitive Brain (FastAPI)
+- **Asynchronous Execution Loop:** Built with `httpx` and `asyncio.Lock()` to handle high-frequency telemetry polling and script execution without blocking the event loop.
+- **Mathematical Telemetry Diffing:** Verifies sub-goal success strictly via mathematical state changes (e.g., checking `post_inventory - pre_inventory >= target`).
+- **Vector Skill Library:** Automatically caches and retrieves successful, dynamically generated LLM code snippets (supporting ChromaDB and JSON fallback).
+- **Curriculum Planner:** A background dependency-tree evaluator that automatically dictates the agent's next sub-goal based on health, biome, and inventory state.
+
+### 🛡️ The Hardened Bridge (Node.js)
+- **Bulletproof VM Sandbox:** Executes LLM-generated code in a strictly controlled `vm` context. `Object.freeze()` prevents prototype pollution, and all async `setTimeout` handles are tracked and destroyed post-execution.
+- **Crash-Proof Safety Nets:** Global `unhandledRejection` guards and isolated `.catch()` chains ensure floating LLM promises never crash the bridge server.
+- **Resilient Crafting Engine:** Features an item alias dictionary to normalize LLM hallucinations (e.g., `wooden_plank` -> `oak_planks`), fuzzy-matching, and automatic pathfinding to 3x3 crafting tables.
+
+### 🎛️ STT Control Center (Alpine.js + Tailwind)
+- **Zero-Latency Dictation:** Features browser-native Web Speech API integration for instant voice-to-text commands.
+- **High-Polish UI/UX:** A modern, dark-mode dashboard featuring mesh gradients, glassmorphism, and live telemetry tracking (Health, Food, XYZ, Biome, and Inventory).
+- **Dynamic Goal Editing:** Instantly pivot the agent's master goal via the realtime REST API.
 
 ---
 
 ## 🚀 Getting Started
 
 ### Prerequisites
-* [Node.js](https://nodejs.org/) installed
-* [Python 3.8+](https://www.python.org/) installed
-* A running Minecraft server (Java Edition)
-* A free [Groq API Key](https://console.groq.com/)
+- Node.js (v18+)
+- Python (3.9+)
+- A Minecraft Server (v1.21.x recommended)
+- A Groq API Key
 
-### 1. Start the Node.js Bridge
-Open a terminal, navigate to the bridge directory, and run:
+### 1. Setup the Node.js Bridge
+Navigate to the `mc_bridge` directory and install the dependencies.
 ```bash
 cd mc_bridge
 npm install
@@ -35,59 +56,36 @@ node bot.js
 
 ```
 
-### 2. Start the Python AI Brain
+*Note: Ensure your local Minecraft server or LAN world is open to `localhost:25565`.*
 
-Open a second terminal, configure your environment, and spin up FastAPI:
+### 2. Setup the Python Brain
+
+Navigate to the `brain` directory, set up your environment, and launch the API.
 
 ```bash
 cd brain
 python -m venv venv
-.\venv\Scripts\Activate  # Use source venv/bin/activate on macOS/Linux
-pip install fastapi uvicorn requests groq python-dotenv
+source venv/bin/activate  # On Windows use: venv\Scripts\activate
+pip install -r requirements.txt
 
-```
+# Add your Groq API key to a .env file
+echo "GROQ_API_KEY=your_key_here" > .env
 
-Create a `.env` file inside the `brain` folder and add your key:
-
-```env
-GROQ_API_KEY=your_groq_api_key_here
-
-```
-
-Run the server:
-
-```bash
 uvicorn main:app --reload
 
 ```
 
+### 3. Launch the Dashboard
+
+Open your browser and navigate to `http://localhost:8000` to access the ARIES Control Center. Click the microphone icon to begin dictating commands, or let the background Curriculum Planner run autonomously!
+
 ---
 
-## 🕹️ Usage & Commands
+## 🔒 Security & Sandboxing Note
 
-### In-Game Natural Language (LLM Agent)
+ARIES dynamically executes untrusted LLM code. The `/api/execute-script` endpoint is hardened against infinite loops, coordinate injection, and prototype pollution, but this bridge should **never** be exposed directly to the public internet without strict authentication middleware.
 
-You can talk to Aries directly inside Minecraft chat using the **`aries`** or **`ai`** prefix. The AI will reason through tools, execute the workflow, and respond in-game:
+## 📄 License
 
-* `aries check what is currently in your inventory`
-* `aries collect 3 dirt and deposit it into the chest`
-* `aries craft 4 oak planks`
-* `aries fight the nearest zombie`
+MIT License
 
-### Legacy / Direct Chat Commands
-
-* `come` — Pathfinds to your exact coordinates.
-* `collect [block_name] [count]` — Mines specific resources (e.g., `collect oak_log 5`).
-* `fight [mob_name]` — Equips a weapon and engages target entities (e.g., `fight zombie`).
-* `stop` — Instantly interrupts all actions, pathfinding, and combat.
-
-### HTTP Endpoints (FastAPI Brain)
-
-* `POST /agent/chat` — Send natural language JSON payload `{"prompt": "your command"}`.
-* `POST /agent/move` — Send `{"x": 100, "y": 64, "z": -200}`.
-* `POST /agent/collect` — Send `{"blockName": "stone", "count": 10}`.
-* `POST /agent/craft` — Send `{"itemName": "stick", "count": 4}`.
-* `POST /agent/deposit` — Send `{"itemName": "dirt", "count": 10}`.
-* `POST /agent/fight` — Send `{"mobName": "skeleton"}`.
-* `GET /agent/inventory` — Fetches current bot inventory contents.
-* `DELETE /agent/stop` — Halts execution state.
